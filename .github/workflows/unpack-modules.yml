@@ -1,0 +1,84 @@
+name: Unpack ModuleShop ZIP
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_name:
+        description: "ZIP file uploaded to repo root, e.g. module_upload_bundle.zip"
+        required: true
+        default: "module_upload_bundle.zip"
+      clean_modules:
+        description: "Delete old modules folder before unzip"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check ZIP exists
+        shell: bash
+        run: |
+          test -f "${{ inputs.zip_name }}" || {
+            echo "ZIP not found at repo root: ${{ inputs.zip_name }}"
+            exit 1
+          }
+
+      - name: Prepare folders
+        shell: bash
+        run: |
+          if [ "${{ inputs.clean_modules }}" = "true" ]; then
+            rm -rf modules
+          fi
+          mkdir -p modules
+          rm -rf .moduleshop_unpack_tmp
+          mkdir -p .moduleshop_unpack_tmp
+
+      - name: Unzip bundle
+        shell: bash
+        run: |
+          unzip -o "${{ inputs.zip_name }}" -d .moduleshop_unpack_tmp
+          if [ -f .moduleshop_unpack_tmp/plugins.json ]; then
+            cp .moduleshop_unpack_tmp/plugins.json ./plugins.json
+          fi
+          if [ -d .moduleshop_unpack_tmp/modules ]; then
+            mkdir -p modules
+            cp -f .moduleshop_unpack_tmp/modules/*.zip modules/ 2>/dev/null || true
+          else
+            mkdir -p modules
+            cp -f .moduleshop_unpack_tmp/*.zip modules/ 2>/dev/null || true
+          fi
+          rm -rf .moduleshop_unpack_tmp
+
+      - name: Validate output
+        shell: bash
+        run: |
+          test -f plugins.json || { echo "plugins.json missing after unzip"; exit 1; }
+          test -d modules || { echo "modules folder missing after unzip"; exit 1; }
+          count=$(find modules -maxdepth 1 -name '*.zip' | wc -l)
+          echo "Module ZIP count: $count"
+          test "$count" -gt 0 || { echo "No module ZIP found"; exit 1; }
+          python3 -m json.tool plugins.json >/dev/null
+
+      - name: Commit unpacked modules
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add plugins.json modules .github/workflows/unpack-modules.yml
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update ModuleShop plugin catalog and modules"
+            git push
+          fi
